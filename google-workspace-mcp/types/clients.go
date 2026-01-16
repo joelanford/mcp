@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"golang.org/x/oauth2/google"
+	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/docs/v1"
 	"google.golang.org/api/drive/v3"
 	"google.golang.org/api/option"
@@ -15,13 +16,15 @@ import (
 // Services are initialized once and shared across tools.
 // Access to services must go through tool-specific client structs.
 type Clients struct {
-	docs  *docs.Service
-	drive *drive.Service
+	calendar *calendar.Service
+	docs     *docs.Service
+	drive    *drive.Service
 }
 
 // RequiredScopes returns all scopes needed by the clients.
 func RequiredScopes() []string {
 	return []string{
+		calendar.CalendarReadonlyScope,
 		docs.DocumentsReadonlyScope,
 		drive.DriveReadonlyScope,
 	}
@@ -41,6 +44,13 @@ func NewClients(ctx context.Context) (*Clients, error) {
 			strings.Join(scopes, ","))
 	}
 
+	calendarService, err := calendar.NewService(ctx,
+		option.WithScopes(calendar.CalendarReadonlyScope),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create calendar service: %w", err)
+	}
+
 	docsService, err := docs.NewService(ctx,
 		option.WithScopes(docs.DocumentsReadonlyScope),
 	)
@@ -56,8 +66,9 @@ func NewClients(ctx context.Context) (*Clients, error) {
 	}
 
 	return &Clients{
-		docs:  docsService,
-		drive: driveService,
+		calendar: calendarService,
+		docs:     docsService,
+		drive:    driveService,
 	}, nil
 }
 
@@ -72,5 +83,17 @@ func (c *Clients) ForDocs() *DocsClients {
 	return &DocsClients{
 		Docs:  c.docs,
 		Drive: c.drive,
+	}
+}
+
+// CalendarClients provides access to services needed by Calendar tools.
+type CalendarClients struct {
+	Calendar *calendar.Service
+}
+
+// ForCalendar returns clients scoped for Calendar tools.
+func (c *Clients) ForCalendar() *CalendarClients {
+	return &CalendarClients{
+		Calendar: c.calendar,
 	}
 }

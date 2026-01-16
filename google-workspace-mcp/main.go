@@ -35,11 +35,15 @@ func main() {
 	s.AddTool(docsTools.GetCommentsTool(), mcp.NewTypedToolHandler(docsTools.GetCommentsHandler))
 	s.AddTool(docsTools.ListInFolderTool(), mcp.NewTypedToolHandler(docsTools.ListInFolderHandler))
 
+	// Register Calendar tools
+	calendarTools := tools.NewCalendarTools(clients.ForCalendar())
+	s.AddTool(calendarTools.ListCalendarsTool(), mcp.NewTypedToolHandler(calendarTools.ListCalendarsHandler))
+	s.AddTool(calendarTools.GetEventsTool(), mcp.NewTypedToolHandler(calendarTools.GetEventsHandler))
+
 	// TODO: Implement additional Google Workspace tools:
 	// - Gmail
 	// - Sheets
 	// - Slides
-	// - Calendar
 	// - Tasks
 
 	if err := server.ServeStdio(s); err != nil {

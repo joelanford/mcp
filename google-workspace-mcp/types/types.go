@@ -42,3 +42,17 @@ type SearchResponse struct {
 	Results       []SearchResult `json:"results"`
 	NextPageToken string         `json:"next_page_token,omitempty"`
 }
+
+// CalendarListArgs contains arguments for listing calendars.
+type CalendarListArgs struct{}
+
+// CalendarGetEventsArgs contains arguments for getting calendar events.
+type CalendarGetEventsArgs struct {
+	CalendarID         string `json:"calendar_id"`         // Calendar ID, defaults to "primary"
+	EventID            string `json:"event_id"`            // Specific event ID (optional)
+	TimeMin            string `json:"time_min"`            // Start of time range in RFC3339 format (optional)
+	TimeMax            string `json:"time_max"`            // End of time range in RFC3339 format (optional)
+	MaxResults         int    `json:"max_results"`         // Maximum number of events to return (default 25)
+	Query              string `json:"query"`               // Free text search query (optional)
+	IncludeAttachments bool   `json:"include_attachments"` // Include file attachments in response
+}
