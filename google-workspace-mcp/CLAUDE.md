@@ -17,24 +17,27 @@ This is an MCP (Model Context Protocol) server that provides read-only access to
 ### Package Structure
 
 - **main.go**: Server initialization, registers all tools with the MCP server
-- **types/**: Shared types
+- **types/**: Shared configuration and client types
   - `clients.go`: Google API client initialization with Application Default Credentials
-  - `types.go`: Request argument structs for tool handlers
+  - `config.go`: Output format configuration (`MCP_OUTPUT_FORMAT` env var)
 - **tools/**: MCP tool implementations, one file per Google service
   - `docs.go`: Google Docs tools (search, get content as markdown, list in folder, get comments)
   - `calendar.go`: Google Calendar tools (list calendars, get events)
   - `gmail.go`: Gmail tools (search, get message, get thread, list labels, get attachment)
 
+Each tool file contains its own request structs, response types, and `MarshalCompact()` methods for compact output.
+
 ### Adding New Tools
 
-1. Add argument structs to `types/types.go`
-2. Create a new `tools/<service>.go` following the pattern:
+1. Create a new `tools/<service>.go` following the pattern:
+   - Define request structs (e.g., `<Service><Action>Request`) in the same file
+   - Define response structs (e.g., `<Service><Action>Response`) with `MarshalCompact()` methods for compact output
    - Define a `<Service>Tools` struct holding the API client
    - Add a `New<Service>Tools(clients *types.<Service>Clients)` constructor
    - For each tool: `<Action>Tool()` returns `mcp.Tool`, `<Action>Handler()` handles calls
-3. Add the client to `types/Clients` and create a `For<Service>()` accessor
-4. Add the new scope to `RequiredScopes()` in `types/clients.go`
-5. Register tools in `main.go`
+2. Add the client to `types/Clients` and create a `For<Service>()` accessor
+3. Add the new scope to `RequiredScopes()` in `types/clients.go`
+4. Register tools in `main.go`
 
 ### Authentication
 

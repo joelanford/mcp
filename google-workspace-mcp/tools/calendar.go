@@ -2,7 +2,7 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -10,6 +10,22 @@ import (
 
 	"github.com/joelanford/mcp/google-workspace/types"
 )
+
+// CalendarListRequest contains arguments for listing calendars.
+type CalendarListRequest struct{}
+
+// CalendarGetEventsRequest contains arguments for getting calendar events.
+type CalendarGetEventsRequest struct {
+	CalendarID         string `json:"calendar_id"`         // Calendar ID, defaults to "primary"
+	EventID            string `json:"event_id"`            // Specific event ID (optional)
+	TimeMin            string `json:"time_min"`            // Start of time range in RFC3339 format (optional)
+	TimeMax            string `json:"time_max"`            // End of time range in RFC3339 format (optional)
+	MaxResults         int    `json:"max_results"`         // Maximum number of events to return (default 25)
+	Query              string `json:"query"`               // Free text search query (optional)
+	IncludeAttachments bool   `json:"include_attachments"` // Include file attachments in response
+	PageToken          string `json:"page_token"`          // Continue from previous page
+	OrderBy            string `json:"order_by"`            // Sort order: startTime (default) or updated
+}
 
 // CalendarTools provides Google Calendar API tools.
 type CalendarTools struct {
@@ -50,7 +66,7 @@ type CalendarInfo struct {
 }
 
 // ListCalendarsHandler handles calendar_list tool calls.
-func (c *CalendarTools) ListCalendarsHandler(ctx context.Context, request mcp.CallToolRequest, args types.CalendarListArgs) (*mcp.CallToolResult, error) {
+func (c *CalendarTools) ListCalendarsHandler(ctx context.Context, request mcp.CallToolRequest, args CalendarListRequest) (*mcp.CallToolResult, error) {
 	calendarList, err := c.calendarService.CalendarList.List().Context(ctx).Do()
 	if err != nil {
 		return mcp.NewToolResultError("failed to list calendars: " + err.Error()), nil
@@ -69,11 +85,11 @@ func (c *CalendarTools) ListCalendarsHandler(ctx context.Context, request mcp.Ca
 		})
 	}
 
-	data, err := json.Marshal(response)
+	data, err := types.MarshalResponse(response)
 	if err != nil {
 		return mcp.NewToolResultError("failed to marshal response: " + err.Error()), nil
 	}
-	return mcp.NewToolResultText(string(data)), nil
+	return mcp.NewToolResultText(data), nil
 }
 
 // GetEventsTool returns the tool definition for getting calendar events.
@@ -96,7 +112,8 @@ Returns a JSON object with an array of events, each containing:
   - location: Event location (if set)
   - description: Event description (if set)
   - htmlLink: Link to view the event in Google Calendar
-  - attendees: List of attendees (if any)`),
+  - attendees: List of attendees (if any)
+  - next_page_token: Token for fetching the next page (if more results exist)`),
 		mcp.WithString("calendar_id",
 			mcp.Description("Calendar identifier (defaults to 'primary')"),
 		),
@@ -118,21 +135,28 @@ Returns a JSON object with an array of events, each containing:
 		mcp.WithBoolean("include_attachments",
 			mcp.Description("Include file attachment information in the response"),
 		),
+		mcp.WithString("page_token",
+			mcp.Description("Page token from previous response to continue pagination"),
+		),
+		mcp.WithString("order_by",
+			mcp.Description("Sort order: startTime (default) or updated"),
+		),
 	)
 }
 
-// EventsResponse contains the list of events.
-type EventsResponse struct {
-	Events []EventInfo `json:"events"`
+// CalendarGetEventsResponse contains the list of events.
+type CalendarGetEventsResponse struct {
+	Events        []CalendarEventInfo `json:"events"`
+	NextPageToken string      `json:"next_page_token,omitempty"`
 }
 
-// SingleEventResponse contains a single event.
-type SingleEventResponse struct {
-	Event EventInfo `json:"event"`
+// CalendarGetEventResponse contains a single event.
+type CalendarGetEventResponse struct {
+	Event CalendarEventInfo `json:"event"`
 }
 
-// EventInfo represents a single event's information.
-type EventInfo struct {
+// CalendarEventInfo represents a single event's information.
+type CalendarEventInfo struct {
 	ID          string           `json:"id"`
 	Summary     string           `json:"summary"`
 	Start       string           `json:"start"`
@@ -140,20 +164,20 @@ type EventInfo struct {
 	Location    string           `json:"location,omitempty"`
 	Description string           `json:"description,omitempty"`
 	HTMLLink    string           `json:"htmlLink"`
-	Attendees   []AttendeeInfo   `json:"attendees,omitempty"`
-	Attachments []AttachmentInfo `json:"attachments,omitempty"`
+	Attendees   []CalendarAttendeeInfo   `json:"attendees,omitempty"`
+	Attachments []CalendarAttachmentInfo `json:"attachments,omitempty"`
 }
 
-// AttendeeInfo represents an event attendee.
-type AttendeeInfo struct {
+// CalendarAttendeeInfo represents an event attendee.
+type CalendarAttendeeInfo struct {
 	Email          string `json:"email"`
 	DisplayName    string `json:"displayName,omitempty"`
 	ResponseStatus string `json:"responseStatus,omitempty"`
 	Organizer      bool   `json:"organizer,omitempty"`
 }
 
-// AttachmentInfo represents an event attachment.
-type AttachmentInfo struct {
+// CalendarAttachmentInfo represents an event attachment.
+type CalendarAttachmentInfo struct {
 	FileID   string `json:"fileId,omitempty"`
 	FileURL  string `json:"fileUrl"`
 	Title    string `json:"title"`
@@ -161,7 +185,7 @@ type AttachmentInfo struct {
 }
 
 // GetEventsHandler handles calendar_get_events tool calls.
-func (c *CalendarTools) GetEventsHandler(ctx context.Context, request mcp.CallToolRequest, args types.CalendarGetEventsArgs) (*mcp.CallToolResult, error) {
+func (c *CalendarTools) GetEventsHandler(ctx context.Context, request mcp.CallToolRequest, args CalendarGetEventsRequest) (*mcp.CallToolResult, error) {
 	calendarID := args.CalendarID
 	if calendarID == "" {
 		calendarID = "primary"
@@ -174,22 +198,33 @@ func (c *CalendarTools) GetEventsHandler(ctx context.Context, request mcp.CallTo
 			return mcp.NewToolResultError("failed to get event: " + err.Error()), nil
 		}
 
-		response := SingleEventResponse{
+		response := CalendarGetEventResponse{
 			Event: eventToInfo(event, args.IncludeAttachments),
 		}
 
-		data, err := json.Marshal(response)
+		data, err := types.MarshalResponse(response)
 		if err != nil {
 			return mcp.NewToolResultError("failed to marshal response: " + err.Error()), nil
 		}
-		return mcp.NewToolResultText(string(data)), nil
+		return mcp.NewToolResultText(data), nil
 	}
 
 	// List events with optional filters
 	listCall := c.calendarService.Events.List(calendarID).
 		Context(ctx).
-		SingleEvents(true).
-		OrderBy("startTime")
+		SingleEvents(true)
+
+	// Set sort order
+	if args.OrderBy != "" {
+		listCall = listCall.OrderBy(args.OrderBy)
+	} else {
+		listCall = listCall.OrderBy("startTime")
+	}
+
+	// Apply pagination
+	if args.PageToken != "" {
+		listCall = listCall.PageToken(args.PageToken)
+	}
 
 	// Set time range
 	if args.TimeMin != "" {
@@ -223,24 +258,25 @@ func (c *CalendarTools) GetEventsHandler(ctx context.Context, request mcp.CallTo
 		return mcp.NewToolResultError("failed to list events: " + err.Error()), nil
 	}
 
-	response := EventsResponse{
-		Events: make([]EventInfo, 0, len(events.Items)),
+	response := CalendarGetEventsResponse{
+		Events:        make([]CalendarEventInfo, 0, len(events.Items)),
+		NextPageToken: events.NextPageToken,
 	}
 
 	for _, event := range events.Items {
 		response.Events = append(response.Events, eventToInfo(event, args.IncludeAttachments))
 	}
 
-	data, err := json.Marshal(response)
+	data, err := types.MarshalResponse(response)
 	if err != nil {
 		return mcp.NewToolResultError("failed to marshal response: " + err.Error()), nil
 	}
-	return mcp.NewToolResultText(string(data)), nil
+	return mcp.NewToolResultText(data), nil
 }
 
-// eventToInfo converts a calendar event to EventInfo.
-func eventToInfo(event *calendar.Event, includeAttachments bool) EventInfo {
-	info := EventInfo{
+// eventToInfo converts a calendar event to CalendarEventInfo.
+func eventToInfo(event *calendar.Event, includeAttachments bool) CalendarEventInfo {
+	info := CalendarEventInfo{
 		ID:          event.Id,
 		Summary:     event.Summary,
 		Location:    event.Location,
@@ -268,9 +304,9 @@ func eventToInfo(event *calendar.Event, includeAttachments bool) EventInfo {
 
 	// Convert attendees
 	if len(event.Attendees) > 0 {
-		info.Attendees = make([]AttendeeInfo, 0, len(event.Attendees))
+		info.Attendees = make([]CalendarAttendeeInfo, 0, len(event.Attendees))
 		for _, attendee := range event.Attendees {
-			info.Attendees = append(info.Attendees, AttendeeInfo{
+			info.Attendees = append(info.Attendees, CalendarAttendeeInfo{
 				Email:          attendee.Email,
 				DisplayName:    attendee.DisplayName,
 				ResponseStatus: attendee.ResponseStatus,
@@ -281,9 +317,9 @@ func eventToInfo(event *calendar.Event, includeAttachments bool) EventInfo {
 
 	// Convert attachments if requested
 	if includeAttachments && len(event.Attachments) > 0 {
-		info.Attachments = make([]AttachmentInfo, 0, len(event.Attachments))
+		info.Attachments = make([]CalendarAttachmentInfo, 0, len(event.Attachments))
 		for _, attachment := range event.Attachments {
-			info.Attachments = append(info.Attachments, AttachmentInfo{
+			info.Attachments = append(info.Attachments, CalendarAttachmentInfo{
 				FileID:   attachment.FileId,
 				FileURL:  attachment.FileUrl,
 				Title:    attachment.Title,
@@ -293,4 +329,151 @@ func eventToInfo(event *calendar.Event, includeAttachments bool) EventInfo {
 	}
 
 	return info
+}
+
+// MarshalCompact returns a compact text representation of the calendar list.
+func (c CalendarListResponse) MarshalCompact() string {
+	var sb strings.Builder
+	sb.WriteString("Calendars:")
+
+	for _, cal := range c.Calendars {
+		if cal.Primary {
+			sb.WriteString("\n* ")
+		} else {
+			sb.WriteString("\n  ")
+		}
+		sb.WriteString(cal.ID)
+		if cal.Summary != "" && cal.Summary != cal.ID {
+			sb.WriteString(" (")
+			sb.WriteString(cal.Summary)
+			sb.WriteString(")")
+		}
+		if cal.Primary {
+			sb.WriteString(" [primary]")
+		}
+		sb.WriteString(" ")
+		sb.WriteString(cal.AccessRole)
+	}
+	return sb.String()
+}
+
+// MarshalCompact returns a compact text representation of the events list.
+func (e CalendarGetEventsResponse) MarshalCompact() string {
+	var sb strings.Builder
+
+	for i, event := range e.Events {
+		if i > 0 {
+			sb.WriteString("\n")
+		}
+		writeEventCompact(&sb, event)
+	}
+
+	if e.NextPageToken != "" {
+		sb.WriteString("\n\nNext Page Token: ")
+		sb.WriteString(e.NextPageToken)
+	}
+
+	return sb.String()
+}
+
+// MarshalCompact returns a compact text representation of a single event.
+func (s CalendarGetEventResponse) MarshalCompact() string {
+	var sb strings.Builder
+	writeEventCompact(&sb, s.Event)
+	return sb.String()
+}
+
+// writeEventCompact writes a single event in compact format.
+func writeEventCompact(sb *strings.Builder, event CalendarEventInfo) {
+	// Parse and format date/time: "2025-01-19 09:00-09:30 | Title | Location"
+	startDate, startTime := parseDateTime(event.Start)
+	_, endTime := parseDateTime(event.End)
+
+	sb.WriteString(startDate)
+	if startTime != "" {
+		sb.WriteString(" ")
+		sb.WriteString(startTime)
+		if endTime != "" {
+			sb.WriteString("-")
+			sb.WriteString(endTime)
+		}
+	}
+	sb.WriteString(" | ")
+	sb.WriteString(event.Summary)
+	if event.Location != "" {
+		sb.WriteString(" | ")
+		sb.WriteString(event.Location)
+	}
+
+	// Description
+	if event.Description != "" {
+		sb.WriteString("\n  Description: ")
+		// Truncate long descriptions and handle newlines
+		desc := strings.ReplaceAll(event.Description, "\n", " ")
+		if len(desc) > 200 {
+			desc = desc[:197] + "..."
+		}
+		sb.WriteString(desc)
+	}
+
+	// Link
+	if event.HTMLLink != "" {
+		sb.WriteString("\n  Link: ")
+		sb.WriteString(event.HTMLLink)
+	}
+
+	// Attendees
+	if len(event.Attendees) > 0 {
+		sb.WriteString("\n  Attendees: ")
+		for i, att := range event.Attendees {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(att.Email)
+			if att.ResponseStatus != "" {
+				sb.WriteString(" (")
+				sb.WriteString(att.ResponseStatus)
+				sb.WriteString(")")
+			}
+		}
+	}
+
+	// Attachments
+	if len(event.Attachments) > 0 {
+		sb.WriteString("\n  Attachments:")
+		for _, att := range event.Attachments {
+			sb.WriteString("\n    ")
+			if att.FileID != "" {
+				sb.WriteString(att.FileID)
+				sb.WriteString(" | ")
+			}
+			sb.WriteString(att.Title)
+			if att.MimeType != "" {
+				sb.WriteString(" | ")
+				sb.WriteString(att.MimeType)
+			}
+		}
+	}
+}
+
+// parseDateTime parses an RFC3339 datetime or date string.
+// Returns (date, time) where time may be empty for all-day events.
+func parseDateTime(dt string) (string, string) {
+	if dt == "" {
+		return "", ""
+	}
+	// All-day event: just a date like "2025-01-19"
+	if len(dt) == 10 {
+		return dt, ""
+	}
+	// RFC3339: "2025-01-19T09:00:00-05:00" or similar
+	t, err := time.Parse(time.RFC3339, dt)
+	if err != nil {
+		// Try parsing without timezone
+		t, err = time.Parse("2006-01-02T15:04:05", dt)
+		if err != nil {
+			return dt, ""
+		}
+	}
+	return t.Format("2006-01-02"), t.Format("15:04")
 }

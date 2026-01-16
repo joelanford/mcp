@@ -3,7 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -11,6 +11,32 @@ import (
 
 	"github.com/joelanford/mcp/google-workspace/types"
 )
+
+// GmailSearchRequest contains arguments for searching Gmail messages.
+type GmailSearchRequest struct {
+	Query     string `json:"query"`      // Gmail search query using standard operators
+	PageSize  int    `json:"page_size"`  // Maximum results to return (default 10, max 100)
+	PageToken string `json:"page_token"` // Pagination token from previous response
+}
+
+// GmailGetMessageRequest contains arguments for getting a Gmail message.
+type GmailGetMessageRequest struct {
+	MessageID string `json:"message_id"` // Gmail message ID
+}
+
+// GmailGetThreadRequest contains arguments for getting a Gmail thread.
+type GmailGetThreadRequest struct {
+	ThreadID string `json:"thread_id"` // Gmail thread ID
+}
+
+// GmailListLabelsRequest contains arguments for listing Gmail labels.
+type GmailListLabelsRequest struct{}
+
+// GmailGetAttachmentRequest contains arguments for getting a Gmail attachment.
+type GmailGetAttachmentRequest struct {
+	MessageID    string `json:"message_id"`    // Message containing the attachment
+	AttachmentID string `json:"attachment_id"` // Attachment ID from gmail_get_message
+}
 
 // GmailTools provides Gmail API tools.
 type GmailTools struct {
@@ -49,6 +75,8 @@ Returns message and thread IDs for use with gmail_get_message and gmail_get_thre
 }
 
 // GmailSearchResult represents a single search result.
+// Note: Gmail messages.list only returns id and threadId.
+// Use gmail_get_message for full details (subject, from, to, body, etc.).
 type GmailSearchResult struct {
 	MessageID string `json:"message_id"`
 	ThreadID  string `json:"thread_id"`
@@ -61,7 +89,7 @@ type GmailSearchResponse struct {
 }
 
 // SearchHandler handles gmail_search tool calls.
-func (g *GmailTools) SearchHandler(ctx context.Context, request mcp.CallToolRequest, args types.GmailSearchArgs) (*mcp.CallToolResult, error) {
+func (g *GmailTools) SearchHandler(ctx context.Context, request mcp.CallToolRequest, args GmailSearchRequest) (*mcp.CallToolResult, error) {
 	if args.Query == "" {
 		return mcp.NewToolResultError("query is required"), nil
 	}
@@ -101,11 +129,11 @@ func (g *GmailTools) SearchHandler(ctx context.Context, request mcp.CallToolRequ
 		NextPageToken: msgList.NextPageToken,
 	}
 
-	data, err := json.Marshal(response)
+	data, err := types.MarshalResponse(response)
 	if err != nil {
 		return mcp.NewToolResultError("failed to marshal response: " + err.Error()), nil
 	}
-	return mcp.NewToolResultText(string(data)), nil
+	return mcp.NewToolResultText(data), nil
 }
 
 // GetMessageTool returns the tool definition for getting a Gmail message.
@@ -132,8 +160,8 @@ type GmailAttachmentInfo struct {
 	Size         int64  `json:"size"`
 }
 
-// GmailMessageResponse represents a single message.
-type GmailMessageResponse struct {
+// GmailGetMessageResponse represents a single message.
+type GmailGetMessageResponse struct {
 	MessageID   string                `json:"message_id"`
 	ThreadID    string                `json:"thread_id"`
 	Subject     string                `json:"subject,omitempty"`
@@ -146,7 +174,7 @@ type GmailMessageResponse struct {
 }
 
 // GetMessageHandler handles gmail_get_message tool calls.
-func (g *GmailTools) GetMessageHandler(ctx context.Context, request mcp.CallToolRequest, args types.GmailGetMessageArgs) (*mcp.CallToolResult, error) {
+func (g *GmailTools) GetMessageHandler(ctx context.Context, request mcp.CallToolRequest, args GmailGetMessageRequest) (*mcp.CallToolResult, error) {
 	if args.MessageID == "" {
 		return mcp.NewToolResultError("message_id is required"), nil
 	}
@@ -161,16 +189,16 @@ func (g *GmailTools) GetMessageHandler(ctx context.Context, request mcp.CallTool
 
 	response := extractMessage(msg)
 
-	data, err := json.Marshal(response)
+	data, err := types.MarshalResponse(response)
 	if err != nil {
 		return mcp.NewToolResultError("failed to marshal response: " + err.Error()), nil
 	}
-	return mcp.NewToolResultText(string(data)), nil
+	return mcp.NewToolResultText(data), nil
 }
 
 // extractMessage extracts message details from a Gmail message.
-func extractMessage(msg *gmail.Message) GmailMessageResponse {
-	response := GmailMessageResponse{
+func extractMessage(msg *gmail.Message) GmailGetMessageResponse {
+	response := GmailGetMessageResponse{
 		MessageID: msg.Id,
 		ThreadID:  msg.ThreadId,
 	}
@@ -294,15 +322,15 @@ Returns all messages in the thread in chronological order, each with:
 	)
 }
 
-// GmailThreadResponse represents a complete thread.
-type GmailThreadResponse struct {
+// GmailGetThreadResponse represents a complete thread.
+type GmailGetThreadResponse struct {
 	ThreadID string                 `json:"thread_id"`
 	Subject  string                 `json:"subject,omitempty"`
-	Messages []GmailMessageResponse `json:"messages"`
+	Messages []GmailGetMessageResponse `json:"messages"`
 }
 
 // GetThreadHandler handles gmail_get_thread tool calls.
-func (g *GmailTools) GetThreadHandler(ctx context.Context, request mcp.CallToolRequest, args types.GmailGetThreadArgs) (*mcp.CallToolResult, error) {
+func (g *GmailTools) GetThreadHandler(ctx context.Context, request mcp.CallToolRequest, args GmailGetThreadRequest) (*mcp.CallToolResult, error) {
 	if args.ThreadID == "" {
 		return mcp.NewToolResultError("thread_id is required"), nil
 	}
@@ -315,9 +343,9 @@ func (g *GmailTools) GetThreadHandler(ctx context.Context, request mcp.CallToolR
 		return mcp.NewToolResultError("failed to get thread: " + err.Error()), nil
 	}
 
-	response := GmailThreadResponse{
+	response := GmailGetThreadResponse{
 		ThreadID: thread.Id,
-		Messages: make([]GmailMessageResponse, 0, len(thread.Messages)),
+		Messages: make([]GmailGetMessageResponse, 0, len(thread.Messages)),
 	}
 
 	for _, msg := range thread.Messages {
@@ -330,11 +358,11 @@ func (g *GmailTools) GetThreadHandler(ctx context.Context, request mcp.CallToolR
 		}
 	}
 
-	data, err := json.Marshal(response)
+	data, err := types.MarshalResponse(response)
 	if err != nil {
 		return mcp.NewToolResultError("failed to marshal response: " + err.Error()), nil
 	}
-	return mcp.NewToolResultText(string(data)), nil
+	return mcp.NewToolResultText(data), nil
 }
 
 // ListLabelsTool returns the tool definition for listing Gmail labels.
@@ -353,20 +381,20 @@ type GmailLabelInfo struct {
 	Type string `json:"type"`
 }
 
-// GmailLabelsResponse contains the list of labels.
-type GmailLabelsResponse struct {
+// GmailListLabelsResponse contains the list of labels.
+type GmailListLabelsResponse struct {
 	SystemLabels []GmailLabelInfo `json:"system_labels"`
 	UserLabels   []GmailLabelInfo `json:"user_labels"`
 }
 
 // ListLabelsHandler handles gmail_list_labels tool calls.
-func (g *GmailTools) ListLabelsHandler(ctx context.Context, request mcp.CallToolRequest, args types.GmailListLabelsArgs) (*mcp.CallToolResult, error) {
+func (g *GmailTools) ListLabelsHandler(ctx context.Context, request mcp.CallToolRequest, args GmailListLabelsRequest) (*mcp.CallToolResult, error) {
 	labelList, err := g.gmailService.Users.Labels.List("me").Context(ctx).Do()
 	if err != nil {
 		return mcp.NewToolResultError("failed to list labels: " + err.Error()), nil
 	}
 
-	response := GmailLabelsResponse{
+	response := GmailListLabelsResponse{
 		SystemLabels: []GmailLabelInfo{},
 		UserLabels:   []GmailLabelInfo{},
 	}
@@ -384,11 +412,11 @@ func (g *GmailTools) ListLabelsHandler(ctx context.Context, request mcp.CallTool
 		}
 	}
 
-	data, err := json.Marshal(response)
+	data, err := types.MarshalResponse(response)
 	if err != nil {
 		return mcp.NewToolResultError("failed to marshal response: " + err.Error()), nil
 	}
-	return mcp.NewToolResultText(string(data)), nil
+	return mcp.NewToolResultText(data), nil
 }
 
 // GetAttachmentTool returns the tool definition for getting a Gmail attachment.
@@ -409,8 +437,8 @@ Use the attachment_id from gmail_get_message results.`),
 	)
 }
 
-// GmailAttachmentResponse contains the attachment data.
-type GmailAttachmentResponse struct {
+// GmailGetAttachmentResponse contains the attachment data.
+type GmailGetAttachmentResponse struct {
 	AttachmentID string `json:"attachment_id"`
 	Filename     string `json:"filename,omitempty"`
 	MimeType     string `json:"mime_type,omitempty"`
@@ -419,7 +447,7 @@ type GmailAttachmentResponse struct {
 }
 
 // GetAttachmentHandler handles gmail_get_attachment tool calls.
-func (g *GmailTools) GetAttachmentHandler(ctx context.Context, request mcp.CallToolRequest, args types.GmailGetAttachmentArgs) (*mcp.CallToolResult, error) {
+func (g *GmailTools) GetAttachmentHandler(ctx context.Context, request mcp.CallToolRequest, args GmailGetAttachmentRequest) (*mcp.CallToolResult, error) {
 	if args.MessageID == "" {
 		return mcp.NewToolResultError("message_id is required"), nil
 	}
@@ -463,7 +491,7 @@ func (g *GmailTools) GetAttachmentHandler(ctx context.Context, request mcp.CallT
 		return mcp.NewToolResultError("failed to get attachment: " + err.Error()), nil
 	}
 
-	response := GmailAttachmentResponse{
+	response := GmailGetAttachmentResponse{
 		AttachmentID: args.AttachmentID,
 		Filename:     filename,
 		MimeType:     mimeType,
@@ -471,9 +499,170 @@ func (g *GmailTools) GetAttachmentHandler(ctx context.Context, request mcp.CallT
 		Data:         attachment.Data, // Already base64url encoded by the API
 	}
 
-	data, err := json.Marshal(response)
+	data, err := types.MarshalResponse(response)
 	if err != nil {
 		return mcp.NewToolResultError("failed to marshal response: " + err.Error()), nil
 	}
-	return mcp.NewToolResultText(string(data)), nil
+	return mcp.NewToolResultText(data), nil
+}
+
+// MarshalCompact returns a compact text representation of the search results.
+// Format: header line followed by "message_id | thread_id" per line.
+func (g GmailSearchResponse) MarshalCompact() string {
+	var sb strings.Builder
+	if len(g.Results) > 0 {
+		sb.WriteString("Message ID | Thread ID\n")
+		for _, r := range g.Results {
+			sb.WriteString(r.MessageID)
+			sb.WriteString(" | ")
+			sb.WriteString(r.ThreadID)
+			sb.WriteString("\n")
+		}
+	}
+	if g.NextPageToken != "" {
+		sb.WriteString("\nNext Page Token: ")
+		sb.WriteString(g.NextPageToken)
+	}
+	return strings.TrimSuffix(sb.String(), "\n")
+}
+
+// MarshalCompact returns a compact text representation of the message.
+func (g GmailGetMessageResponse) MarshalCompact() string {
+	var sb strings.Builder
+
+	if g.From != "" {
+		sb.WriteString("From: ")
+		sb.WriteString(g.From)
+		sb.WriteString("\n")
+	}
+	if g.To != "" {
+		sb.WriteString("To: ")
+		sb.WriteString(g.To)
+		sb.WriteString("\n")
+	}
+	if g.Cc != "" {
+		sb.WriteString("Cc: ")
+		sb.WriteString(g.Cc)
+		sb.WriteString("\n")
+	}
+	if g.Date != "" {
+		sb.WriteString("Date: ")
+		sb.WriteString(g.Date)
+		sb.WriteString("\n")
+	}
+	if g.Subject != "" {
+		sb.WriteString("Subject: ")
+		sb.WriteString(g.Subject)
+		sb.WriteString("\n")
+	}
+
+	if g.Body != "" {
+		sb.WriteString("\n")
+		sb.WriteString(g.Body)
+	}
+
+	if len(g.Attachments) > 0 {
+		sb.WriteString("\n\nAttachments:")
+		for _, att := range g.Attachments {
+			sb.WriteString("\n  ")
+			sb.WriteString(att.AttachmentID)
+			sb.WriteString(" | ")
+			sb.WriteString(att.Filename)
+			sb.WriteString(" | ")
+			sb.WriteString(att.MimeType)
+			sb.WriteString(" | ")
+			sb.WriteString(formatSize(att.Size))
+		}
+	}
+
+	return sb.String()
+}
+
+// MarshalCompact returns a compact text representation of the thread.
+func (g GmailGetThreadResponse) MarshalCompact() string {
+	var sb strings.Builder
+	sb.WriteString("Thread: ")
+	sb.WriteString(g.ThreadID)
+	if g.Subject != "" {
+		sb.WriteString("\nSubject: ")
+		sb.WriteString(g.Subject)
+	}
+	sb.WriteString("\n")
+
+	for i, msg := range g.Messages {
+		if i > 0 {
+			sb.WriteString("\n---\n\n")
+		} else {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(msg.MarshalCompact())
+	}
+
+	return sb.String()
+}
+
+// MarshalCompact returns a compact text representation of the labels.
+func (g GmailListLabelsResponse) MarshalCompact() string {
+	var sb strings.Builder
+
+	if len(g.SystemLabels) > 0 {
+		sb.WriteString("System: ")
+		for i, label := range g.SystemLabels {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(label.Name)
+		}
+	}
+
+	if len(g.UserLabels) > 0 {
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("User: ")
+		for i, label := range g.UserLabels {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(label.Name)
+		}
+	}
+
+	return sb.String()
+}
+
+// MarshalCompact returns a compact text representation of the attachment.
+// Note: Attachments contain binary data, so compact format just shows metadata
+// and includes the base64 data which is unavoidable.
+func (g GmailGetAttachmentResponse) MarshalCompact() string {
+	var sb strings.Builder
+	sb.WriteString("Attachment: ")
+	sb.WriteString(g.AttachmentID)
+	if g.Filename != "" {
+		sb.WriteString("\nFilename: ")
+		sb.WriteString(g.Filename)
+	}
+	if g.MimeType != "" {
+		sb.WriteString("\nType: ")
+		sb.WriteString(g.MimeType)
+	}
+	sb.WriteString("\nSize: ")
+	sb.WriteString(formatSize(g.Size))
+	sb.WriteString("\n\nData (base64):\n")
+	sb.WriteString(g.Data)
+	return sb.String()
+}
+
+// formatSize formats a byte size into a human-readable string.
+func formatSize(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%dB", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }

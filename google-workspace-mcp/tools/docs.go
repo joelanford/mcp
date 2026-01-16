@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -16,6 +15,77 @@ import (
 
 // multipleNewlinesRe matches 3 or more consecutive newlines.
 var multipleNewlinesRe = regexp.MustCompile(`\n{3,}`)
+
+// DocsSearchRequest contains arguments for searching Google Docs via Drive API.
+type DocsSearchRequest struct {
+	Query          string `json:"query"`
+	PageSize       int    `json:"page_size"`
+	PageToken      string `json:"page_token"`       // Continue from previous page
+	OrderBy        string `json:"order_by"`         // Sort order: createdTime, modifiedTime, name, name_natural
+	ModifiedAfter  string `json:"modified_after"`   // RFC3339 date - only docs modified after this time
+	ModifiedBefore string `json:"modified_before"`  // RFC3339 date - only docs modified before this time
+	OwnerEmail     string `json:"owner_email"`      // Filter to docs owned by this email
+}
+
+// DocsGetContentRequest contains arguments for getting document content.
+type DocsGetContentRequest struct {
+	DocumentID string `json:"document_id"`
+}
+
+// DocsListInFolderRequest contains arguments for listing docs in a folder.
+type DocsListInFolderRequest struct {
+	FolderID       string `json:"folder_id"`
+	PageSize       int    `json:"page_size"`
+	PageToken      string `json:"page_token"`       // Continue from previous page
+	OrderBy        string `json:"order_by"`         // Sort order: createdTime, modifiedTime, name, name_natural
+	ModifiedAfter  string `json:"modified_after"`   // RFC3339 date filter
+	ModifiedBefore string `json:"modified_before"`  // RFC3339 date filter
+}
+
+// DocsGetCommentsRequest contains arguments for getting document comments.
+type DocsGetCommentsRequest struct {
+	DocumentID      string `json:"document_id"`
+	IncludeResolved bool   `json:"include_resolved"`
+	PageToken       string `json:"page_token"`     // Continue from previous page
+	PageSize        int    `json:"page_size"`      // Max comments per page (default 100)
+	ModifiedAfter   string `json:"modified_after"` // RFC3339 date - only comments modified after this time
+}
+
+// DocsSearchResult represents a single item in docs search results.
+type DocsSearchResult struct {
+	ID      string `json:"id"`
+	Title   string `json:"title,omitempty"`
+	Subject string `json:"subject,omitempty"`
+	Snippet string `json:"snippet,omitempty"`
+}
+
+// DocsSearchResponse contains paginated search results.
+type DocsSearchResponse struct {
+	Results       []DocsSearchResult `json:"results"`
+	NextPageToken string             `json:"next_page_token,omitempty"`
+}
+
+// MarshalCompact returns a compact text representation of the search response.
+// Format: one result per line as "id | title" or "id | subject" (whichever is set)
+// with optional "Next Page Token: <token>" appended if pagination continues.
+func (s DocsSearchResponse) MarshalCompact() string {
+	var sb strings.Builder
+	for _, r := range s.Results {
+		sb.WriteString(r.ID)
+		sb.WriteString(" | ")
+		if r.Title != "" {
+			sb.WriteString(r.Title)
+		} else if r.Subject != "" {
+			sb.WriteString(r.Subject)
+		}
+		sb.WriteString("\n")
+	}
+	if s.NextPageToken != "" {
+		sb.WriteString("\nNext Page Token: ")
+		sb.WriteString(s.NextPageToken)
+	}
+	return strings.TrimSuffix(sb.String(), "\n")
+}
 
 // DocsTools provides Google Docs API tools.
 type DocsTools struct {
@@ -47,11 +117,26 @@ Returns:
 			mcp.Min(1),
 			mcp.Max(100),
 		),
+		mcp.WithString("page_token",
+			mcp.Description("Page token from previous response to continue pagination"),
+		),
+		mcp.WithString("order_by",
+			mcp.Description("Sort order: createdTime, modifiedTime, name, name_natural (append ' desc' for descending)"),
+		),
+		mcp.WithString("modified_after",
+			mcp.Description("Only include docs modified after this date (RFC3339 format, e.g. '2025-01-01T00:00:00Z')"),
+		),
+		mcp.WithString("modified_before",
+			mcp.Description("Only include docs modified before this date (RFC3339 format)"),
+		),
+		mcp.WithString("owner_email",
+			mcp.Description("Only include docs owned by this email address"),
+		),
 	)
 }
 
 // SearchHandler handles docs_search tool calls.
-func (d *DocsTools) SearchHandler(ctx context.Context, request mcp.CallToolRequest, args types.DocsSearchArgs) (*mcp.CallToolResult, error) {
+func (d *DocsTools) SearchHandler(ctx context.Context, request mcp.CallToolRequest, args DocsSearchRequest) (*mcp.CallToolResult, error) {
 	if args.Query == "" {
 		return mcp.NewToolResultError("query is required"), nil
 	}
@@ -67,47 +152,69 @@ func (d *DocsTools) SearchHandler(ctx context.Context, request mcp.CallToolReque
 	// Build query: search by name, filter to Google Docs, exclude trashed
 	q := fmt.Sprintf("name contains '%s' and mimeType='application/vnd.google-apps.document' and trashed=false", escapedQuery)
 
-	fileList, err := d.driveService.Files.List().
+	// Add date filters
+	if args.ModifiedAfter != "" {
+		q += fmt.Sprintf(" and modifiedTime > '%s'", args.ModifiedAfter)
+	}
+	if args.ModifiedBefore != "" {
+		q += fmt.Sprintf(" and modifiedTime < '%s'", args.ModifiedBefore)
+	}
+	// Add owner filter
+	if args.OwnerEmail != "" {
+		q += fmt.Sprintf(" and '%s' in owners", args.OwnerEmail)
+	}
+
+	call := d.driveService.Files.List().
 		Context(ctx).
 		Q(q).
 		PageSize(int64(pageSize)).
-		Fields("files(id, name, createdTime, modifiedTime, webViewLink)").
+		Fields("nextPageToken, files(id, name, createdTime, modifiedTime, webViewLink)").
 		SupportsAllDrives(true).
-		IncludeItemsFromAllDrives(true).
-		Do()
+		IncludeItemsFromAllDrives(true)
+
+	// Apply pagination
+	if args.PageToken != "" {
+		call = call.PageToken(args.PageToken)
+	}
+	// Apply sorting
+	if args.OrderBy != "" {
+		call = call.OrderBy(args.OrderBy)
+	}
+
+	fileList, err := call.Do()
 	if err != nil {
 		return mcp.NewToolResultError("failed to search documents: " + err.Error()), nil
 	}
 
-	results := make([]types.SearchResult, 0, len(fileList.Files))
+	results := make([]DocsSearchResult, 0, len(fileList.Files))
 	for _, f := range fileList.Files {
-		results = append(results, types.SearchResult{
+		results = append(results, DocsSearchResult{
 			ID:    f.Id,
 			Title: f.Name,
 		})
 	}
 
-	response := types.SearchResponse{
+	response := DocsSearchResponse{
 		Results:       results,
 		NextPageToken: fileList.NextPageToken,
 	}
 
-	data, err := json.Marshal(response)
+	data, err := types.MarshalResponse(response)
 	if err != nil {
 		return mcp.NewToolResultError("failed to marshal response: " + err.Error()), nil
 	}
-	return mcp.NewToolResultText(string(data)), nil
+	return mcp.NewToolResultText(data), nil
 }
 
-// DocContentResponse represents the structured response for document content.
-type DocContentResponse struct {
-	DocID    string       `json:"docId"`
-	DocTitle string       `json:"docTitle"`
-	Tabs     []TabContent `json:"tabs"`
+// DocsGetContentResponse represents the structured response for document content.
+type DocsGetContentResponse struct {
+	DocID    string            `json:"docId"`
+	DocTitle string            `json:"docTitle"`
+	Tabs     []DocsTabContent  `json:"tabs"`
 }
 
-// TabContent represents a single tab's content.
-type TabContent struct {
+// DocsTabContent represents a single tab's content.
+type DocsTabContent struct {
 	TabID       string `json:"tabId"`
 	TabTitle    string `json:"tabTitle"`
 	TabMarkdown string `json:"tabMarkdown"`
@@ -135,7 +242,7 @@ Returns a JSON object:
 }
 
 // GetContentHandler handles docs_get_content tool calls.
-func (d *DocsTools) GetContentHandler(ctx context.Context, request mcp.CallToolRequest, args types.DocsGetContentArgs) (*mcp.CallToolResult, error) {
+func (d *DocsTools) GetContentHandler(ctx context.Context, request mcp.CallToolRequest, args DocsGetContentRequest) (*mcp.CallToolResult, error) {
 	if args.DocumentID == "" {
 		return mcp.NewToolResultError("document_id is required"), nil
 	}
@@ -149,10 +256,10 @@ func (d *DocsTools) GetContentHandler(ctx context.Context, request mcp.CallToolR
 	}
 
 	// Build structured response
-	response := DocContentResponse{
+	response := DocsGetContentResponse{
 		DocID:    args.DocumentID,
 		DocTitle: doc.Title,
-		Tabs:     []TabContent{},
+		Tabs:     []DocsTabContent{},
 	}
 
 	// Process all tabs (with recursive child tab support)
@@ -162,18 +269,18 @@ func (d *DocsTools) GetContentHandler(ctx context.Context, request mcp.CallToolR
 		// Fallback for legacy single-tab documents
 		var content strings.Builder
 		extractMarkdownContent(&content, doc.Body.Content, nil, 0)
-		response.Tabs = append(response.Tabs, TabContent{
+		response.Tabs = append(response.Tabs, DocsTabContent{
 			TabID:       "",
 			TabTitle:    doc.Title,
 			TabMarkdown: normalizeNewlines(content.String()),
 		})
 	}
 
-	data, err := json.Marshal(response)
+	data, err := types.MarshalResponse(response)
 	if err != nil {
 		return mcp.NewToolResultError("failed to marshal response: " + err.Error()), nil
 	}
-	return mcp.NewToolResultText(string(data)), nil
+	return mcp.NewToolResultText(data), nil
 }
 
 // normalizeNewlines collapses runs of 3+ newlines down to 2 (one blank line).
@@ -181,9 +288,9 @@ func normalizeNewlines(s string) string {
 	return multipleNewlinesRe.ReplaceAllString(s, "\n\n")
 }
 
-// collectAllTabs recursively collects all tabs and their children into TabContent slices.
-func collectAllTabs(tabs []*docs.Tab, docTitle string) []TabContent {
-	var result []TabContent
+// collectAllTabs recursively collects all tabs and their children into DocsTabContent slices.
+func collectAllTabs(tabs []*docs.Tab, docTitle string) []DocsTabContent {
+	var result []DocsTabContent
 
 	for _, tab := range tabs {
 		if tab.TabProperties != nil && tab.DocumentTab != nil {
@@ -198,7 +305,7 @@ func collectAllTabs(tabs []*docs.Tab, docTitle string) []TabContent {
 				extractMarkdownContent(&content, tab.DocumentTab.Body.Content, tab.DocumentTab.Lists, 0)
 			}
 
-			result = append(result, TabContent{
+			result = append(result, DocsTabContent{
 				TabID:       tab.TabProperties.TabId,
 				TabTitle:    tabTitle,
 				TabMarkdown: normalizeNewlines(content.String()),
@@ -368,8 +475,8 @@ func formatTextRun(tr *docs.TextRun) string {
 	text = strings.ReplaceAll(text, "\u000B", "\n\n")
 
 	// Convert smart typography to ASCII equivalents for compatibility
-	text = strings.ReplaceAll(text, "\u2018", "'") // left single quote
-	text = strings.ReplaceAll(text, "\u2019", "'") // right single quote / apostrophe
+	text = strings.ReplaceAll(text, "\u2018", "'")  // left single quote
+	text = strings.ReplaceAll(text, "\u2019", "'")  // right single quote / apostrophe
 	text = strings.ReplaceAll(text, "\u201C", "\"") // left double quote
 	text = strings.ReplaceAll(text, "\u201D", "\"") // right double quote
 	text = strings.ReplaceAll(text, "\u2014", "--") // em dash
@@ -469,11 +576,23 @@ Returns:
 			mcp.Min(1),
 			mcp.Max(1000),
 		),
+		mcp.WithString("page_token",
+			mcp.Description("Page token from previous response to continue pagination"),
+		),
+		mcp.WithString("order_by",
+			mcp.Description("Sort order: createdTime, modifiedTime, name, name_natural (append ' desc' for descending)"),
+		),
+		mcp.WithString("modified_after",
+			mcp.Description("Only include docs modified after this date (RFC3339 format)"),
+		),
+		mcp.WithString("modified_before",
+			mcp.Description("Only include docs modified before this date (RFC3339 format)"),
+		),
 	)
 }
 
 // ListInFolderHandler handles docs_list_in_folder tool calls.
-func (d *DocsTools) ListInFolderHandler(ctx context.Context, request mcp.CallToolRequest, args types.DocsListInFolderArgs) (*mcp.CallToolResult, error) {
+func (d *DocsTools) ListInFolderHandler(ctx context.Context, request mcp.CallToolRequest, args DocsListInFolderRequest) (*mcp.CallToolResult, error) {
 	folderID := args.FolderID
 	if folderID == "" {
 		folderID = "root"
@@ -487,42 +606,60 @@ func (d *DocsTools) ListInFolderHandler(ctx context.Context, request mcp.CallToo
 	// Build query: docs in folder, exclude trashed
 	q := fmt.Sprintf("'%s' in parents and mimeType='application/vnd.google-apps.document' and trashed=false", folderID)
 
-	fileList, err := d.driveService.Files.List().
+	// Add date filters
+	if args.ModifiedAfter != "" {
+		q += fmt.Sprintf(" and modifiedTime > '%s'", args.ModifiedAfter)
+	}
+	if args.ModifiedBefore != "" {
+		q += fmt.Sprintf(" and modifiedTime < '%s'", args.ModifiedBefore)
+	}
+
+	call := d.driveService.Files.List().
 		Context(ctx).
 		Q(q).
 		PageSize(int64(pageSize)).
-		Fields("files(id, name, createdTime, modifiedTime, webViewLink)").
+		Fields("nextPageToken, files(id, name, createdTime, modifiedTime, webViewLink)").
 		SupportsAllDrives(true).
-		IncludeItemsFromAllDrives(true).
-		Do()
+		IncludeItemsFromAllDrives(true)
+
+	// Apply pagination
+	if args.PageToken != "" {
+		call = call.PageToken(args.PageToken)
+	}
+	// Apply sorting
+	if args.OrderBy != "" {
+		call = call.OrderBy(args.OrderBy)
+	}
+
+	fileList, err := call.Do()
 	if err != nil {
 		return mcp.NewToolResultError("failed to list documents: " + err.Error()), nil
 	}
 
-	results := make([]types.SearchResult, 0, len(fileList.Files))
+	results := make([]DocsSearchResult, 0, len(fileList.Files))
 	for _, f := range fileList.Files {
-		results = append(results, types.SearchResult{
+		results = append(results, DocsSearchResult{
 			ID:    f.Id,
 			Title: f.Name,
 		})
 	}
 
-	response := types.SearchResponse{
+	response := DocsSearchResponse{
 		Results:       results,
 		NextPageToken: fileList.NextPageToken,
 	}
 
-	data, err := json.Marshal(response)
+	data, err := types.MarshalResponse(response)
 	if err != nil {
 		return mcp.NewToolResultError("failed to marshal response: " + err.Error()), nil
 	}
-	return mcp.NewToolResultText(string(data)), nil
+	return mcp.NewToolResultText(data), nil
 }
 
 // GetCommentsTool returns the tool definition for fetching document comments.
 func (d *DocsTools) GetCommentsTool() mcp.Tool {
 	return mcp.NewTool("docs_get_comments",
-		mcp.WithDescription("Retrieves comments and replies from a Google Doc"),
+		mcp.WithDescription(`Retrieves comments and replies from a Google Doc.`),
 		mcp.WithString("document_id",
 			mcp.Required(),
 			mcp.Description("The document ID"),
@@ -530,61 +667,88 @@ func (d *DocsTools) GetCommentsTool() mcp.Tool {
 		mcp.WithBoolean("include_resolved",
 			mcp.Description("Include resolved comments (default false, only shows open comments)"),
 		),
+		mcp.WithString("page_token",
+			mcp.Description("Page token from previous response to continue pagination"),
+		),
+		mcp.WithNumber("page_size",
+			mcp.Description("Maximum number of comments per page (default 100)"),
+			mcp.Min(1),
+			mcp.Max(100),
+		),
+		mcp.WithString("modified_after",
+			mcp.Description("Only include comments modified after this date (RFC3339 format)"),
+		),
 	)
 }
 
-// DocComment represents a comment on a document.
-type DocComment struct {
-	ID           string         `json:"id"`
-	Author       string         `json:"author"`
-	AuthorEmail  string         `json:"author_email,omitempty"`
-	Content      string         `json:"content"`
-	QuotedText   string         `json:"quoted_text,omitempty"`
-	CreatedTime  string         `json:"created_time"`
-	ModifiedTime string         `json:"modified_time,omitempty"`
-	Resolved     bool           `json:"resolved"`
-	Replies      []CommentReply `json:"replies,omitempty"`
+// DocsComment represents a comment on a document.
+type DocsComment struct {
+	ID           string             `json:"id"`
+	Author       string             `json:"author"`
+	AuthorIsMe   bool               `json:"author_is_me"`
+	Content      string             `json:"content"`
+	QuotedText   string             `json:"quoted_text,omitempty"`
+	CreatedTime  string             `json:"created_time"`
+	ModifiedTime string             `json:"modified_time,omitempty"`
+	Resolved     bool               `json:"resolved"`
+	Replies      []DocsCommentReply `json:"replies,omitempty"`
 }
 
-// CommentReply represents a reply to a comment.
-type CommentReply struct {
+// DocsCommentReply represents a reply to a comment.
+type DocsCommentReply struct {
 	ID          string `json:"id"`
 	Author      string `json:"author"`
-	AuthorEmail string `json:"author_email,omitempty"`
+	AuthorIsMe  bool   `json:"author_is_me"`
 	Content     string `json:"content"`
 	CreatedTime string `json:"created_time"`
 }
 
-// DocCommentsResponse contains the comments for a document.
-type DocCommentsResponse struct {
-	DocumentID string       `json:"document_id"`
-	Comments   []DocComment `json:"comments"`
+// DocsGetCommentsResponse contains the comments for a document.
+type DocsGetCommentsResponse struct {
+	DocumentID    string        `json:"document_id"`
+	Comments      []DocsComment `json:"comments"`
+	NextPageToken string        `json:"next_page_token,omitempty"`
 }
 
 // GetCommentsHandler handles docs_get_comments tool calls.
-func (d *DocsTools) GetCommentsHandler(ctx context.Context, request mcp.CallToolRequest, args types.DocsGetCommentsArgs) (*mcp.CallToolResult, error) {
+func (d *DocsTools) GetCommentsHandler(ctx context.Context, request mcp.CallToolRequest, args DocsGetCommentsRequest) (*mcp.CallToolResult, error) {
 	if args.DocumentID == "" {
 		return mcp.NewToolResultError("document_id is required"), nil
 	}
 
 	call := d.driveService.Comments.List(args.DocumentID).
 		Context(ctx).
-		Fields("comments(id, author, content, quotedFileContent, createdTime, modifiedTime, resolved, replies)").
+		Fields("nextPageToken, comments(id, author, content, quotedFileContent, createdTime, modifiedTime, resolved, replies)").
 		IncludeDeleted(false)
+
+	// Apply pagination
+	if args.PageToken != "" {
+		call = call.PageToken(args.PageToken)
+	}
+	// Apply page size
+	if args.PageSize > 0 {
+		call = call.PageSize(int64(args.PageSize))
+	} else {
+		call = call.PageSize(100)
+	}
+	// Apply modified after filter (API supports startModifiedTime)
+	if args.ModifiedAfter != "" {
+		call = call.StartModifiedTime(args.ModifiedAfter)
+	}
 
 	commentList, err := call.Do()
 	if err != nil {
 		return mcp.NewToolResultError("failed to get comments: " + err.Error()), nil
 	}
 
-	var comments []DocComment
+	var comments []DocsComment
 	for _, c := range commentList.Comments {
 		// Skip resolved comments unless requested
 		if c.Resolved && !args.IncludeResolved {
 			continue
 		}
 
-		comment := DocComment{
+		comment := DocsComment{
 			ID:           c.Id,
 			Content:      c.Content,
 			CreatedTime:  c.CreatedTime,
@@ -594,7 +758,7 @@ func (d *DocsTools) GetCommentsHandler(ctx context.Context, request mcp.CallTool
 
 		if c.Author != nil {
 			comment.Author = c.Author.DisplayName
-			comment.AuthorEmail = c.Author.EmailAddress
+			comment.AuthorIsMe = c.Author.Me
 		}
 
 		if c.QuotedFileContent != nil {
@@ -602,14 +766,14 @@ func (d *DocsTools) GetCommentsHandler(ctx context.Context, request mcp.CallTool
 		}
 
 		for _, r := range c.Replies {
-			reply := CommentReply{
+			reply := DocsCommentReply{
 				ID:          r.Id,
 				Content:     r.Content,
 				CreatedTime: r.CreatedTime,
 			}
 			if r.Author != nil {
 				reply.Author = r.Author.DisplayName
-				reply.AuthorEmail = r.Author.EmailAddress
+				reply.AuthorIsMe = r.Author.Me
 			}
 			comment.Replies = append(comment.Replies, reply)
 		}
@@ -617,14 +781,102 @@ func (d *DocsTools) GetCommentsHandler(ctx context.Context, request mcp.CallTool
 		comments = append(comments, comment)
 	}
 
-	response := DocCommentsResponse{
-		DocumentID: args.DocumentID,
-		Comments:   comments,
+	response := DocsGetCommentsResponse{
+		DocumentID:    args.DocumentID,
+		Comments:      comments,
+		NextPageToken: commentList.NextPageToken,
 	}
 
-	data, err := json.Marshal(response)
+	data, err := types.MarshalResponse(response)
 	if err != nil {
 		return mcp.NewToolResultError("failed to marshal response: " + err.Error()), nil
 	}
-	return mcp.NewToolResultText(string(data)), nil
+	return mcp.NewToolResultText(data), nil
+}
+
+// MarshalCompact returns a compact text representation of the document content.
+func (d DocsGetContentResponse) MarshalCompact() string {
+	var sb strings.Builder
+	sb.WriteString("=== Document: ")
+	sb.WriteString(d.DocTitle)
+	sb.WriteString(" ===\nID: ")
+	sb.WriteString(d.DocID)
+	sb.WriteString("\n")
+
+	for _, tab := range d.Tabs {
+		sb.WriteString("\n--- Tab: ")
+		sb.WriteString(tab.TabTitle)
+		if tab.TabID != "" {
+			sb.WriteString(" (id: ")
+			sb.WriteString(tab.TabID)
+			sb.WriteString(")")
+		}
+		sb.WriteString(" ---\n")
+		sb.WriteString(tab.TabMarkdown)
+		if !strings.HasSuffix(tab.TabMarkdown, "\n") {
+			sb.WriteString("\n")
+		}
+	}
+	return strings.TrimSuffix(sb.String(), "\n")
+}
+
+// MarshalCompact returns a compact text representation of the comments response.
+func (d DocsGetCommentsResponse) MarshalCompact() string {
+	var sb strings.Builder
+
+	for i, c := range d.Comments {
+		if i > 0 {
+			sb.WriteString("\n")
+		}
+		// Comment header: "Comment <id> by <author> at <time> [resolved]"
+		sb.WriteString("Comment ")
+		sb.WriteString(c.ID)
+		sb.WriteString(" by ")
+		if c.AuthorIsMe {
+			sb.WriteString("Me")
+		} else {
+			sb.WriteString(c.Author)
+		}
+		sb.WriteString(" at ")
+		sb.WriteString(c.CreatedTime)
+		if c.Resolved {
+			sb.WriteString(" [resolved]")
+		}
+		sb.WriteString("\n")
+
+		// Quoted text
+		if c.QuotedText != "" {
+			sb.WriteString("> ")
+			sb.WriteString(strings.ReplaceAll(c.QuotedText, "\n", "\n> "))
+			sb.WriteString("\n")
+		}
+
+		// Comment content
+		sb.WriteString(c.Content)
+		sb.WriteString("\n")
+
+		// Replies
+		for _, r := range c.Replies {
+			sb.WriteString("  Reply ")
+			sb.WriteString(r.ID)
+			sb.WriteString(" by ")
+			if r.AuthorIsMe {
+				sb.WriteString("Me")
+			} else {
+				sb.WriteString(r.Author)
+			}
+			sb.WriteString(" at ")
+			sb.WriteString(r.CreatedTime)
+			sb.WriteString("\n  ")
+			sb.WriteString(strings.ReplaceAll(r.Content, "\n", "\n  "))
+			sb.WriteString("\n")
+		}
+	}
+
+	if d.NextPageToken != "" {
+		sb.WriteString("\nNext Page Token: ")
+		sb.WriteString(d.NextPageToken)
+	}
+
+	return strings.TrimSuffix(sb.String(), "\n")
 }
