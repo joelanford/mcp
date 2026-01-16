@@ -56,3 +56,29 @@ type CalendarGetEventsArgs struct {
 	Query              string `json:"query"`               // Free text search query (optional)
 	IncludeAttachments bool   `json:"include_attachments"` // Include file attachments in response
 }
+
+// GmailSearchArgs contains arguments for searching Gmail messages.
+type GmailSearchArgs struct {
+	Query     string `json:"query"`      // Gmail search query using standard operators
+	PageSize  int    `json:"page_size"`  // Maximum results to return (default 10, max 100)
+	PageToken string `json:"page_token"` // Pagination token from previous response
+}
+
+// GmailGetMessageArgs contains arguments for getting a Gmail message.
+type GmailGetMessageArgs struct {
+	MessageID string `json:"message_id"` // Gmail message ID
+}
+
+// GmailGetThreadArgs contains arguments for getting a Gmail thread.
+type GmailGetThreadArgs struct {
+	ThreadID string `json:"thread_id"` // Gmail thread ID
+}
+
+// GmailListLabelsArgs contains arguments for listing Gmail labels.
+type GmailListLabelsArgs struct{}
+
+// GmailGetAttachmentArgs contains arguments for getting a Gmail attachment.
+type GmailGetAttachmentArgs struct {
+	MessageID    string `json:"message_id"`    // Message containing the attachment
+	AttachmentID string `json:"attachment_id"` // Attachment ID from gmail_get_message
+}

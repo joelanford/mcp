@@ -23,6 +23,7 @@ This is an MCP (Model Context Protocol) server that provides read-only access to
 - **tools/**: MCP tool implementations, one file per Google service
   - `docs.go`: Google Docs tools (search, get content as markdown, list in folder, get comments)
   - `calendar.go`: Google Calendar tools (list calendars, get events)
+  - `gmail.go`: Gmail tools (search, get message, get thread, list labels, get attachment)
 
 ### Adding New Tools
 
@@ -40,10 +41,14 @@ This is an MCP (Model Context Protocol) server that provides read-only access to
 Uses Google Application Default Credentials with read-only scopes. Authenticate with all required scopes:
 
 ```bash
-gcloud auth application-default login --scopes="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/calendar.readonly,https://www.googleapis.com/auth/documents.readonly,https://www.googleapis.com/auth/drive.readonly"
+gcloud auth application-default login --scopes="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/calendar.readonly,https://www.googleapis.com/auth/documents.readonly,https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/gmail.readonly"
 ```
 
 The `cloud-platform` scope is always required by gcloud. Service-specific scopes are defined in `types.RequiredScopes()`.
+
+## Tool Definitions
+
+Follow the read-only tool definitions as defined in https://github.com/taylorwilsdon/google_workspace_mcp for the Google APIs implemented in this project. To research the upstream project, clone it locally (`git clone https://github.com/taylorwilsdon/google_workspace_mcp /tmp/google_workspace_mcp`) and use local file exploration tools. When implementing a tool with the exact same inputs and outputs as the upstream project, copy the tool descriptions verbatim. The upstream project's LICENSE permits verbatim copying because this project meets its requirements. If adding or removing functionality that differs from the upstream project, adjust the description accordingly.
 
 ## Maintaining This File
 

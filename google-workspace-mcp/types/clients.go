@@ -9,6 +9,7 @@ import (
 	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/docs/v1"
 	"google.golang.org/api/drive/v3"
+	"google.golang.org/api/gmail/v1"
 	"google.golang.org/api/option"
 )
 
@@ -19,6 +20,7 @@ type Clients struct {
 	calendar *calendar.Service
 	docs     *docs.Service
 	drive    *drive.Service
+	gmail    *gmail.Service
 }
 
 // RequiredScopes returns all scopes needed by the clients.
@@ -27,6 +29,7 @@ func RequiredScopes() []string {
 		calendar.CalendarReadonlyScope,
 		docs.DocumentsReadonlyScope,
 		drive.DriveReadonlyScope,
+		gmail.GmailReadonlyScope,
 	}
 }
 
@@ -65,10 +68,18 @@ func NewClients(ctx context.Context) (*Clients, error) {
 		return nil, fmt.Errorf("failed to create drive service: %w", err)
 	}
 
+	gmailService, err := gmail.NewService(ctx,
+		option.WithScopes(gmail.GmailReadonlyScope),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gmail service: %w", err)
+	}
+
 	return &Clients{
 		calendar: calendarService,
 		docs:     docsService,
 		drive:    driveService,
+		gmail:    gmailService,
 	}, nil
 }
 
@@ -95,5 +106,17 @@ type CalendarClients struct {
 func (c *Clients) ForCalendar() *CalendarClients {
 	return &CalendarClients{
 		Calendar: c.calendar,
+	}
+}
+
+// GmailClients provides access to services needed by Gmail tools.
+type GmailClients struct {
+	Gmail *gmail.Service
+}
+
+// ForGmail returns clients scoped for Gmail tools.
+func (c *Clients) ForGmail() *GmailClients {
+	return &GmailClients{
+		Gmail: c.gmail,
 	}
 }

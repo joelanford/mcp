@@ -40,8 +40,15 @@ func main() {
 	s.AddTool(calendarTools.ListCalendarsTool(), mcp.NewTypedToolHandler(calendarTools.ListCalendarsHandler))
 	s.AddTool(calendarTools.GetEventsTool(), mcp.NewTypedToolHandler(calendarTools.GetEventsHandler))
 
+	// Register Gmail tools
+	gmailTools := tools.NewGmailTools(clients.ForGmail())
+	s.AddTool(gmailTools.SearchTool(), mcp.NewTypedToolHandler(gmailTools.SearchHandler))
+	s.AddTool(gmailTools.GetMessageTool(), mcp.NewTypedToolHandler(gmailTools.GetMessageHandler))
+	s.AddTool(gmailTools.GetThreadTool(), mcp.NewTypedToolHandler(gmailTools.GetThreadHandler))
+	s.AddTool(gmailTools.ListLabelsTool(), mcp.NewTypedToolHandler(gmailTools.ListLabelsHandler))
+	s.AddTool(gmailTools.GetAttachmentTool(), mcp.NewTypedToolHandler(gmailTools.GetAttachmentHandler))
+
 	// TODO: Implement additional Google Workspace tools:
-	// - Gmail
 	// - Sheets
 	// - Slides
 	// - Tasks
