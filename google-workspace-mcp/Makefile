@@ -3,6 +3,9 @@ BIN_DIR := bin
 
 .PHONY: build clean
 
+install:
+	go install .
+
 build:
 	@mkdir -p $(BIN_DIR)
 	go build -o $(BIN_DIR)/$(BINARY_NAME) .

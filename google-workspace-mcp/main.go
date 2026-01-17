@@ -8,8 +8,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/joelanford/mcp/google-workspace/tools"
-	"github.com/joelanford/mcp/google-workspace/types"
+	"github.com/joelanford/mcp/google-workspace-mcp/tools"
+	"github.com/joelanford/mcp/google-workspace-mcp/types"
 )
 
 func main() {

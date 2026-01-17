@@ -1,4 +1,4 @@
-module github.com/joelanford/mcp/google-workspace
+module github.com/joelanford/mcp/google-workspace-mcp
 
 go 1.24.6
 

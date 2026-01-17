@@ -10,7 +10,7 @@ import (
 	"google.golang.org/api/docs/v1"
 	"google.golang.org/api/drive/v3"
 
-	"github.com/joelanford/mcp/google-workspace/types"
+	"github.com/joelanford/mcp/google-workspace-mcp/types"
 )
 
 // multipleNewlinesRe matches 3 or more consecutive newlines.
@@ -371,10 +371,7 @@ func processParagraph(sb *strings.Builder, para *docs.Paragraph, lists map[strin
 	// Apply offset and cap at 6
 	headingPrefix := ""
 	if headingLevel > 0 {
-		adjustedLevel := headingLevel + headingOffset
-		if adjustedLevel > 6 {
-			adjustedLevel = 6
-		}
+		adjustedLevel := min(headingLevel+headingOffset, 6)
 		headingPrefix = strings.Repeat("#", adjustedLevel) + " "
 	}
 

@@ -8,7 +8,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"google.golang.org/api/calendar/v3"
 
-	"github.com/joelanford/mcp/google-workspace/types"
+	"github.com/joelanford/mcp/google-workspace-mcp/types"
 )
 
 // CalendarListRequest contains arguments for listing calendars.

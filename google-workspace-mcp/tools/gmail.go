@@ -9,7 +9,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"google.golang.org/api/gmail/v1"
 
-	"github.com/joelanford/mcp/google-workspace/types"
+	"github.com/joelanford/mcp/google-workspace-mcp/types"
 )
 
 // GmailSearchRequest contains arguments for searching Gmail messages.
